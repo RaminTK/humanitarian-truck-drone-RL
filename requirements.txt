@@ -1,0 +1,11 @@
+gymnasium>=0.29,<1.3
+stable-baselines3>=2.3
+sb3-contrib>=2.3
+torch>=2.3
+numpy>=1.26
+pandas>=2.1
+matplotlib>=3.8
+networkx>=3.2
+scipy>=1.11
+# Optional for the OR-Tools TSP baseline:
+# ortools>=9.10
