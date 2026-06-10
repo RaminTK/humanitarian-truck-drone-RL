@@ -2,6 +2,12 @@
 
 This project is a complete Python 3.12 research scaffold for a single-objective deep reinforcement learning study of humanitarian truck-drone routing. It generates synthetic disrupted-access delivery instances, trains PPO policies, compares them against heuristic baselines, and saves conference-paper-ready result tables and plots.
 
+## Version Safety Note
+
+- `v1` is the stable baseline checkpoint: MaskablePPO, route-based evaluation, VNS, and detailed runtime reporting.
+- `v2-ppo-improvement` is the experimental branch for PPO improvement and ablation studies.
+- Experimental v2 work should write to `results_v2/` and should not overwrite v1 `results/`, `models/`, or baseline source files unless the change is explicitly part of the v2 experiment.
+
 ## Problem Description
 
 The setting contains one depot, one truck, one drone, and `n` aid nodes. Some nodes are truck-accessible and the rest are drone-only. Every node must be served exactly once.
