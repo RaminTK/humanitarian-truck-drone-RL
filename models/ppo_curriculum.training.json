@@ -1,0 +1,18 @@
+{
+  "model_path": "/Users/raminkhameneh/Projects/humanitarian_truck_drone_rl/models/ppo_curriculum.zip",
+  "size": 40,
+  "total_timesteps": 2000000,
+  "train_instances": 500,
+  "seed": 42,
+  "n_envs": 4,
+  "max_nodes": 50,
+  "behavior_clone_epochs": 3,
+  "training_runtime_seconds": 909.1612047919771,
+  "training_mode": "curriculum_total",
+  "curriculum_sizes": [
+    10,
+    20,
+    30,
+    40
+  ]
+}

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import time
 from pathlib import Path
 from typing import Any
@@ -12,6 +13,7 @@ import pandas as pd
 from baselines import PolicyResult, run_baselines
 from instance_generator import ProblemInstance
 from truck_drone_env import TruckDroneEnv
+from vns import vns_policy
 
 
 INSTALL_COMMAND = "/opt/anaconda3/bin/python -m pip install -r requirements.txt"
@@ -60,7 +62,7 @@ def evaluate_ppo_policy(
     env = TruckDroneEnv(n_nodes=size, max_nodes=max_nodes)
     obs, _ = env.reset(options={"instance": instance})
 
-    start_time = time.perf_counter()
+    inference_start = time.perf_counter()
     terminated = False
     truncated = False
     info: dict[str, Any] = {}
@@ -77,15 +79,24 @@ def evaluate_ppo_policy(
         ppo_action_fallbacks += int(used_fallback)
         obs, _, terminated, truncated, info = env.step(action)
 
-    runtime = time.perf_counter() - start_time
+    inference_runtime_seconds = time.perf_counter() - inference_start
+    evaluation_start = time.perf_counter()
     service_sequence = [int(node) for node in info.get("service_sequence", env.service_sequence)]
+    trace = env.get_trace()
+    action_history = [int(action) for action in info.get("action_history", env.action_history)]
+    truck_route = [int(node) for node in info.get("truck_route", env.truck_route)]
+    drone_routes = [dict(route) for route in info.get("drone_routes", env.drone_routes)]
+    route_signature = str(info.get("route_signature", env.route_signature))
+    num_unique_actions = int(info.get("num_unique_actions", len(set(service_sequence))))
+    evaluation_runtime_seconds = time.perf_counter() - evaluation_start
+    runtime_seconds = inference_runtime_seconds + evaluation_runtime_seconds
     return PolicyResult(
         method="ppo",
         makespan=float(info.get("makespan", env.elapsed_time)),
         total_distance=float(info.get("total_distance", env.total_distance)),
         completion_rate=float(info.get("completion_rate", 0.0)),
         invalid_actions=int(info.get("invalid_actions", env.invalid_actions)),
-        runtime=float(runtime),
+        runtime=float(runtime_seconds),
         steps=int(info.get("step_count", env.step_count)),
         served_customers=int(info.get("served_customers", env.num_served)),
         unserved_customers=int(info.get("unserved_customers", env.num_unserved)),
@@ -93,14 +104,17 @@ def evaluate_ppo_policy(
         feasible=bool(info.get("feasible", False)),
         penalized_makespan=float(info.get("penalized_makespan", env.elapsed_time)),
         terminal_status=str(info.get("terminal_status", "unknown")),
-        trace=env.get_trace(),
+        trace=trace,
         service_sequence=service_sequence,
-        action_history=[int(action) for action in info.get("action_history", env.action_history)],
-        truck_route=[int(node) for node in info.get("truck_route", env.truck_route)],
-        drone_routes=[dict(route) for route in info.get("drone_routes", env.drone_routes)],
-        route_signature=str(info.get("route_signature", env.route_signature)),
-        num_unique_actions=int(info.get("num_unique_actions", len(set(service_sequence)))),
+        action_history=action_history,
+        truck_route=truck_route,
+        drone_routes=drone_routes,
+        route_signature=route_signature,
+        num_unique_actions=num_unique_actions,
         ppo_action_fallbacks=ppo_action_fallbacks,
+        training_runtime_seconds=0.0,
+        inference_runtime_seconds=float(inference_runtime_seconds),
+        evaluation_runtime_seconds=float(evaluation_runtime_seconds),
     )
 
 
@@ -110,6 +124,10 @@ def evaluate_size(
     model_path: str | Path | None = None,
     seed: int = 42,
     include_ortools: bool = True,
+    include_vns: bool = True,
+    vns_max_iterations: int = 200,
+    vns_max_no_improve: int = 50,
+    vns_time_limit_seconds: float | None = None,
     max_nodes: int = 50,
     mask_ppo_actions: bool = True,
 ) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, list[dict[str, Any]]]]:
@@ -119,11 +137,13 @@ def evaluate_size(
     route_traces: dict[str, list[dict[str, Any]]] = {}
     ppo_available = model_path is not None and Path(model_path).exists()
     ppo_model = None
+    ppo_training_runtime_seconds = 0.0
     if ppo_available:
         candidate_model = load_ppo_model(model_path)
         expected_env = TruckDroneEnv(n_nodes=size, max_nodes=max_nodes)
         if _model_matches_env(candidate_model, expected_env):
             ppo_model = candidate_model
+            ppo_training_runtime_seconds = _load_training_runtime_seconds(model_path)
         else:
             print(
                 f"Skipping PPO for n={size}: saved model shape does not match "
@@ -138,6 +158,15 @@ def evaluate_size(
         )
 
         method_results: dict[str, PolicyResult] = dict(baseline_results)
+        if include_vns:
+            method_results["vns"] = vns_policy(
+                instance=instance,
+                seed=seed + (20_000 * size) + instance_id,
+                max_nodes=max_nodes,
+                max_iterations=vns_max_iterations,
+                max_no_improve=vns_max_no_improve,
+                time_limit_seconds=vns_time_limit_seconds,
+            )
         if ppo_model is not None:
             method_results["ppo"] = evaluate_ppo_policy(
                 model=ppo_model,
@@ -156,6 +185,7 @@ def evaluate_size(
 
     detailed = _add_nearest_neighbor_gap_columns(pd.DataFrame(detailed_records))
     summary = summarize_results(detailed)
+    summary = _attach_ppo_training_runtime(summary, ppo_training_runtime_seconds)
     return summary, detailed, route_traces
 
 
@@ -165,6 +195,7 @@ def summarize_results(detailed: pd.DataFrame) -> pd.DataFrame:
     if detailed.empty:
         return pd.DataFrame()
 
+    detailed = _ensure_timing_columns(detailed)
     summary = (
         detailed.groupby(["size", "method"], as_index=False)
         .agg(
@@ -181,8 +212,14 @@ def summarize_results(detailed: pd.DataFrame) -> pd.DataFrame:
             mean_gap_to_nn_makespan_percent=("gap_to_nn_makespan_percent", "mean"),
             mean_gap_to_nn_distance_percent=("gap_to_nn_distance_percent", "mean"),
             mean_runtime=("runtime", "mean"),
+            avg_runtime_seconds=("runtime_seconds", "mean"),
+            std_runtime_seconds=("runtime_seconds", "std"),
+            avg_inference_runtime_seconds=("inference_runtime_seconds", "mean"),
+            avg_evaluation_runtime_seconds=("evaluation_runtime_seconds", "mean"),
+            avg_training_runtime_seconds=("training_runtime_seconds", "mean"),
+            avg_total_runtime_seconds=("total_runtime_seconds", "mean"),
         )
-        .fillna({"std_makespan": 0.0})
+        .fillna({"std_makespan": 0.0, "std_runtime_seconds": 0.0})
     )
     summary = add_improvement_columns(summary)
     return summary.sort_values(
@@ -256,6 +293,10 @@ def final_table(summary: pd.DataFrame) -> pd.DataFrame:
         "mean_gap_to_nn_makespan_percent",
         "mean_gap_to_nn_distance_percent",
         "mean_runtime",
+        "avg_runtime_seconds",
+        "std_runtime_seconds",
+        "avg_inference_runtime_seconds",
+        "avg_training_runtime_seconds",
         "improvement_vs_greedy",
     ]
     table = summary.loc[:, columns].copy()
@@ -273,10 +314,106 @@ def final_table(summary: pd.DataFrame) -> pd.DataFrame:
         "mean_gap_to_nn_makespan_percent",
         "mean_gap_to_nn_distance_percent",
         "mean_runtime",
+        "avg_runtime_seconds",
+        "std_runtime_seconds",
+        "avg_inference_runtime_seconds",
+        "avg_training_runtime_seconds",
         "improvement_vs_greedy",
     ]
     table[numeric_columns] = table[numeric_columns].round(4)
     return table
+
+
+def print_method_comparison(summary: pd.DataFrame) -> None:
+    """Print compact method-level averages and PPO gaps."""
+
+    if summary.empty:
+        return
+
+    method_averages = (
+        summary.groupby("method", as_index=False)
+        .agg(
+            **{
+                "Avg Makespan": ("mean_makespan", "mean"),
+                "Avg Distance": ("mean_total_distance", "mean"),
+                "Avg Runtime": ("avg_runtime_seconds", "mean"),
+                "Feasible Rate": ("feasibility_rate", "mean"),
+            }
+        )
+        .rename(columns={"method": "Method"})
+        .sort_values("Avg Makespan")
+    )
+    display_columns = ["Avg Makespan", "Avg Distance", "Avg Runtime", "Feasible Rate"]
+    method_averages[display_columns] = method_averages[display_columns].round(4)
+
+    print("\nRuntime comparison table:")
+    print(method_averages.to_string(index=False))
+
+    gaps: list[dict[str, float | int]] = []
+    for size, rows in summary.groupby("size"):
+        method_to_makespan = dict(zip(rows["method"], rows["mean_makespan"]))
+        ppo_makespan = method_to_makespan.get("ppo")
+        if ppo_makespan is None:
+            continue
+        row: dict[str, float | int] = {"size": int(size)}
+        for baseline in ("vns", "nearest_neighbor"):
+            baseline_makespan = method_to_makespan.get(baseline)
+            if baseline_makespan and baseline_makespan > 0:
+                row[f"ppo_vs_{baseline}_gap_percent"] = (
+                    100.0 * (ppo_makespan - baseline_makespan) / baseline_makespan
+                )
+        gaps.append(row)
+
+    if gaps:
+        gap_table = pd.DataFrame(gaps).round(4)
+        print("\nPPO makespan gaps, positive means PPO is slower:")
+        print(gap_table.to_string(index=False))
+
+
+def _ensure_timing_columns(detailed: pd.DataFrame) -> pd.DataFrame:
+    detailed = detailed.copy()
+    if "runtime_seconds" not in detailed:
+        detailed["runtime_seconds"] = detailed.get("runtime", 0.0)
+    if "inference_runtime_seconds" not in detailed:
+        detailed["inference_runtime_seconds"] = detailed["runtime_seconds"]
+    if "evaluation_runtime_seconds" not in detailed:
+        detailed["evaluation_runtime_seconds"] = 0.0
+    if "training_runtime_seconds" not in detailed:
+        detailed["training_runtime_seconds"] = 0.0
+    if "total_runtime_seconds" not in detailed:
+        detailed["total_runtime_seconds"] = (
+            detailed["inference_runtime_seconds"]
+            + detailed["evaluation_runtime_seconds"]
+            + detailed["training_runtime_seconds"]
+        )
+    return detailed
+
+
+def _load_training_runtime_seconds(model_path: str | Path | None) -> float:
+    if model_path is None:
+        return 0.0
+
+    metadata_path = Path(model_path).with_suffix(".training.json")
+    if not metadata_path.exists():
+        return 0.0
+
+    try:
+        metadata = json.loads(metadata_path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return 0.0
+    return float(metadata.get("training_runtime_seconds", 0.0))
+
+
+def _attach_ppo_training_runtime(summary: pd.DataFrame, training_runtime_seconds: float) -> pd.DataFrame:
+    if summary.empty:
+        return summary
+
+    summary = summary.copy()
+    if "avg_training_runtime_seconds" not in summary:
+        summary["avg_training_runtime_seconds"] = 0.0
+    if training_runtime_seconds > 0:
+        summary.loc[summary["method"] == "ppo", "avg_training_runtime_seconds"] = float(training_runtime_seconds)
+    return summary
 
 
 def _predict_ppo_action(
@@ -285,7 +422,7 @@ def _predict_ppo_action(
     action_mask: np.ndarray,
     deterministic: bool,
     mask_actions: bool,
-) -> int:
+) -> tuple[int, bool]:
     if mask_actions:
         try:
             action, _ = model.predict(

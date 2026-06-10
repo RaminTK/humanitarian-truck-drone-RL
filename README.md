@@ -78,6 +78,7 @@ Episodes terminate successfully only when all nodes are served. If `max_steps = 
 - `random_valid`: uniformly chooses among unvisited nodes
 - `nearest_neighbor`: chooses the unvisited node with minimum feasible service time
 - `drone_priority`: prioritizes drone-only and drone-favorable nodes, then nearby truck nodes
+- `vns`: Variable Neighborhood Search initialized from the nearest-neighbor route
 - `ortools_tsp`: optional OR-Tools route over truck-accessible nodes plus drone-only sorties from stops
 
 If OR-Tools is not installed, the optional baseline is skipped automatically.
@@ -109,6 +110,11 @@ The detailed CSV reports feasibility-first metrics for every method and instance
 - `makespan`
 - `total_distance`
 - `total_reward`
+- `runtime_seconds`
+- `inference_runtime_seconds`
+- `evaluation_runtime_seconds`
+- `training_runtime_seconds`
+- `total_runtime_seconds`
 - `nn_makespan`
 - `nn_distance`
 - `gap_to_nn_makespan_percent`
@@ -119,6 +125,8 @@ The detailed CSV reports feasibility-first metrics for every method and instance
 - `service_sequence`
 - `truck_route`
 - `num_unique_actions`
+
+For PPO, per-instance runtime columns report inference and evaluation time only; PPO training runtime is saved in `summary.csv` as `avg_training_runtime_seconds` using the model training metadata sidecar.
 
 The penalized makespan is `makespan + 10000 * unserved_customers + 1000 * invalid_actions`. Raw makespan is not credited as an improvement unless the method is feasible on all evaluated instances.
 
@@ -186,6 +194,10 @@ The main reproducibility controls are:
 - `--no-curriculum`: train separate models instead of one progressive policy
 - `--quick-curriculum`: use `50,000` timesteps per curriculum stage
 - `--bc-epochs`: nearest-neighbor behavior cloning epochs before PPO, default `3`
+- `--no-vns`: skip the VNS metaheuristic baseline
+- `--vns-max-iterations`: VNS outer-loop budget, default `200`
+- `--vns-max-no-improve`: stop VNS after this many non-improving iterations, default `50`
+- `--vns-time-limit`: optional VNS per-instance time limit in seconds
 
 Example:
 
@@ -215,6 +227,17 @@ The `--quick` mode uses:
 - `2,048` PPO timesteps
 - `5` test instances
 - `1` behavior-cloning epoch
+- `20` VNS iterations and `5` non-improving iterations
+
+## VNS Baseline
+
+`vns.py` implements a Variable Neighborhood Search baseline. It starts from the existing nearest-neighbor service sequence, then searches feasible route-order permutations with three neighborhoods:
+
+- Swap two customers
+- Relocate one customer to another position
+- Reverse a subsequence with 2-opt
+
+Every candidate is executed through `TruckDroneEnv`, so the objective is route-dependent and uses the same realized metrics as PPO evaluation. VNS optimizes `(makespan, total_distance)`, keeps only complete routes with zero invalid actions, and uses seeded NumPy randomness for reproducibility.
 
 ## Limitations
 

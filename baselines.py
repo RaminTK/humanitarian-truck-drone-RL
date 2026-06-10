@@ -47,8 +47,17 @@ class PolicyResult:
     route_signature: str = ""
     num_unique_actions: int = 0
     ppo_action_fallbacks: int = 0
+    training_runtime_seconds: float = 0.0
+    inference_runtime_seconds: float | None = None
+    evaluation_runtime_seconds: float = 0.0
 
     def to_record(self, size: int, instance_id: int, seed: int | None) -> dict[str, object]:
+        inference_runtime_seconds = (
+            self.runtime if self.inference_runtime_seconds is None else self.inference_runtime_seconds
+        )
+        total_runtime_seconds = (
+            self.training_runtime_seconds + inference_runtime_seconds + self.evaluation_runtime_seconds
+        )
         return {
             "size": size,
             "instance_id": instance_id,
@@ -62,6 +71,11 @@ class PolicyResult:
             "feasible": self.feasible,
             "invalid_actions": self.invalid_actions,
             "runtime": self.runtime,
+            "runtime_seconds": self.runtime,
+            "inference_runtime_seconds": inference_runtime_seconds,
+            "evaluation_runtime_seconds": self.evaluation_runtime_seconds,
+            "training_runtime_seconds": self.training_runtime_seconds,
+            "total_runtime_seconds": total_runtime_seconds,
             "steps": self.steps,
             "total_reward": self.total_reward,
             "penalized_makespan": self.penalized_makespan,
@@ -160,6 +174,7 @@ def _finish_result(
     trace: list[dict[str, float | int | str]],
     service_sequence: list[int],
 ) -> PolicyResult:
+    metric_start = time.perf_counter()
     served_customers = int(visited.sum())
     unserved_customers = int(len(visited) - served_customers)
     completion_rate = served_customers / len(visited)
@@ -184,13 +199,16 @@ def _finish_result(
         if step["mode"] == "drone"
     ]
     route_signature = "-".join(str(node) for node in service_sequence)
+    evaluation_runtime_seconds = time.perf_counter() - metric_start
+    total_runtime_seconds = time.perf_counter() - start_time
+    inference_runtime_seconds = max(0.0, total_runtime_seconds - evaluation_runtime_seconds)
     return PolicyResult(
         method=method,
         makespan=float(elapsed_time),
         total_distance=float(total_distance),
         completion_rate=float(completion_rate),
         invalid_actions=invalid_actions,
-        runtime=float(time.perf_counter() - start_time),
+        runtime=float(total_runtime_seconds),
         steps=len(service_sequence),
         served_customers=served_customers,
         unserved_customers=unserved_customers,
@@ -210,6 +228,9 @@ def _finish_result(
         drone_routes=drone_routes,
         route_signature=route_signature,
         num_unique_actions=len(set(service_sequence)),
+        training_runtime_seconds=0.0,
+        inference_runtime_seconds=float(inference_runtime_seconds),
+        evaluation_runtime_seconds=float(evaluation_runtime_seconds),
     )
 
 

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+import time
 from pathlib import Path
 
 import numpy as np
@@ -51,6 +53,7 @@ def train_ppo_for_size(
 ) -> Path:
     """Train and save one MaskablePPO model for a fixed instance size."""
 
+    training_start = time.perf_counter()
     (
         BaseCallback,
         Monitor,
@@ -133,6 +136,18 @@ def train_ppo_for_size(
 
     output_path = model_dir / f"ppo_n{size}.zip"
     model.save(output_path)
+    _write_training_metadata(
+        model_path=output_path,
+        size=size,
+        total_timesteps=total_timesteps,
+        train_instances=train_instances,
+        seed=seed,
+        n_envs=n_envs,
+        max_nodes=max_nodes,
+        behavior_clone_epochs=behavior_clone_epochs,
+        training_runtime_seconds=time.perf_counter() - training_start,
+        training_mode="single_size",
+    )
     env.close()
     return output_path
 
@@ -168,8 +183,10 @@ def train_curriculum_ppo(
     model = None
     saved_paths: dict[int, Path] = {}
     stage_timesteps = stage_timesteps or DEFAULT_CURRICULUM_TIMESTEPS
+    curriculum_start = time.perf_counter()
 
     for stage_index, size in enumerate(sizes):
+        stage_start = time.perf_counter()
         total_timesteps = int(stage_timesteps.get(size, DEFAULT_CURRICULUM_TIMESTEPS.get(size, 200_000)))
         print(f"\nCurriculum stage {stage_index + 1}/{len(sizes)}: n={size}, timesteps={total_timesteps:,}")
 
@@ -264,13 +281,80 @@ def train_curriculum_ppo(
 
         output_path = model_dir / f"ppo_n{size}.zip"
         model.save(output_path)
+        _write_training_metadata(
+            model_path=output_path,
+            size=size,
+            total_timesteps=total_timesteps,
+            train_instances=train_instances,
+            seed=seed,
+            n_envs=n_envs,
+            max_nodes=max_nodes,
+            behavior_clone_epochs=behavior_clone_epochs,
+            training_runtime_seconds=time.perf_counter() - stage_start,
+            training_mode="curriculum_stage",
+            curriculum_stage=stage_index + 1,
+            curriculum_sizes=sizes,
+        )
         saved_paths[size] = output_path
         env.close()
 
     if model is not None:
-        model.save(model_dir / "ppo_curriculum.zip")
+        curriculum_path = model_dir / "ppo_curriculum.zip"
+        model.save(curriculum_path)
+        _write_training_metadata(
+            model_path=curriculum_path,
+            size=max(sizes),
+            total_timesteps=sum(int(stage_timesteps.get(size, 0)) for size in sizes),
+            train_instances=train_instances,
+            seed=seed,
+            n_envs=n_envs,
+            max_nodes=max_nodes,
+            behavior_clone_epochs=behavior_clone_epochs,
+            training_runtime_seconds=time.perf_counter() - curriculum_start,
+            training_mode="curriculum_total",
+            curriculum_sizes=sizes,
+        )
 
     return saved_paths
+
+
+def training_metadata_path(model_path: str | Path) -> Path:
+    return Path(model_path).with_suffix(".training.json")
+
+
+def _write_training_metadata(
+    *,
+    model_path: str | Path,
+    size: int,
+    total_timesteps: int,
+    train_instances: int,
+    seed: int,
+    n_envs: int,
+    max_nodes: int,
+    behavior_clone_epochs: int,
+    training_runtime_seconds: float,
+    training_mode: str,
+    curriculum_stage: int | None = None,
+    curriculum_sizes: list[int] | None = None,
+) -> None:
+    metadata = {
+        "model_path": str(Path(model_path)),
+        "size": int(size),
+        "total_timesteps": int(total_timesteps),
+        "train_instances": int(train_instances),
+        "seed": int(seed),
+        "n_envs": int(n_envs),
+        "max_nodes": int(max_nodes),
+        "behavior_clone_epochs": int(behavior_clone_epochs),
+        "training_runtime_seconds": float(training_runtime_seconds),
+        "training_mode": training_mode,
+    }
+    if curriculum_stage is not None:
+        metadata["curriculum_stage"] = int(curriculum_stage)
+    if curriculum_sizes is not None:
+        metadata["curriculum_sizes"] = [int(size) for size in curriculum_sizes]
+
+    training_metadata_path(model_path).write_text(json.dumps(metadata, indent=2) + "\n")
 
 
 def _load_maskable_ppo_dependencies():

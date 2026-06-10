@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from evaluate import evaluate_size, final_table
+from evaluate import evaluate_size, final_table, print_method_comparison
 from instance_generator import INSTANCE_SIZES, generate_instances
 from train_ppo import (
     DEFAULT_CURRICULUM_TIMESTEPS,
@@ -44,6 +44,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--model-dir", type=Path, default=PROJECT_ROOT / "models")
     parser.add_argument("--results-dir", type=Path, default=PROJECT_ROOT / "results")
     parser.add_argument("--skip-ortools", action="store_true", help="Skip the optional OR-Tools baseline.")
+    parser.add_argument("--no-vns", action="store_true", help="Skip the Variable Neighborhood Search baseline.")
+    parser.add_argument("--vns-max-iterations", type=int, default=200)
+    parser.add_argument("--vns-max-no-improve", type=int, default=50)
+    parser.add_argument("--vns-time-limit", type=float, default=None, help="Optional VNS time limit per instance.")
     parser.add_argument(
         "--no-mask-ppo-actions",
         action="store_true",
@@ -136,6 +140,10 @@ def main() -> None:
                 model_path=model_path if model_path.exists() else None,
                 seed=args.seed,
                 include_ortools=not args.skip_ortools,
+                include_vns=not args.no_vns,
+                vns_max_iterations=args.vns_max_iterations,
+                vns_max_no_improve=args.vns_max_no_improve,
+                vns_time_limit_seconds=args.vns_time_limit,
                 max_nodes=args.max_nodes,
                 mask_ppo_actions=not args.no_mask_ppo_actions,
             )
@@ -194,6 +202,7 @@ def main() -> None:
 
         print("\nFinal summary table:")
         print(final_table(summary_results).to_string(index=False))
+        print_method_comparison(summary_results)
         print(f"\nSaved results to {args.results_dir}")
     elif args.train:
         plot_combined_learning_curves(log_root, plots_dir / "convergence_reward_curve.png")
@@ -211,6 +220,8 @@ def _apply_defaults(args: argparse.Namespace) -> None:
         args.n_envs = 1
         args.bc_epochs = min(args.bc_epochs, 1)
         args.skip_ortools = True
+        args.vns_max_iterations = min(args.vns_max_iterations, 20)
+        args.vns_max_no_improve = min(args.vns_max_no_improve, 5)
 
     if not args.train and not args.evaluate:
         args.train = True
@@ -232,6 +243,12 @@ def _validate_args(args: argparse.Namespace) -> None:
         raise ValueError("test-instances must be positive")
     if args.n_envs <= 0:
         raise ValueError("n-envs must be positive")
+    if args.vns_max_iterations <= 0:
+        raise ValueError("vns-max-iterations must be positive")
+    if args.vns_max_no_improve <= 0:
+        raise ValueError("vns-max-no-improve must be positive")
+    if args.vns_time_limit is not None and args.vns_time_limit <= 0:
+        raise ValueError("vns-time-limit must be positive when provided")
 
 
 def _timesteps_for_size(args: argparse.Namespace, size: int) -> int:
