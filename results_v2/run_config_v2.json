@@ -1,0 +1,21 @@
+{
+  "sizes": [
+    10
+  ],
+  "timesteps": 512,
+  "train_instances": 20,
+  "test_instances": 5,
+  "seed": 42,
+  "n_envs": 1,
+  "max_nodes": 50,
+  "variants": [
+    "ppo_full_current",
+    "ppo_no_curriculum",
+    "ppo_no_behavior_cloning",
+    "ppo_without_nn_reward_shaping",
+    "ppo_no_nn_bonus",
+    "ppo_reduced_nn_regret",
+    "ppo_stronger_final_makespan",
+    "ppo_bc_warm_less_reward_imitation"
+  ]
+}

@@ -245,6 +245,31 @@ The `--quick` mode uses:
 
 Every candidate is executed through `TruckDroneEnv`, so the objective is route-dependent and uses the same realized metrics as PPO evaluation. VNS optimizes `(makespan, total_distance)`, keeps only complete routes with zero invalid actions, and uses seeded NumPy randomness for reproducibility.
 
+## V2 PPO Improvement Experiments
+
+`experiments_v2.py` runs PPO reward and ablation experiments without overwriting v1 artifacts. It writes models to `models_v2/` and result tables to `results_v2/`.
+
+Quick smoke test:
+
+```bash
+/opt/anaconda3/bin/python experiments_v2.py --quick
+```
+
+Longer v2 comparison:
+
+```bash
+/opt/anaconda3/bin/python experiments_v2.py --sizes 10 20 30 40 --timesteps 50000 --train-instances 100 --test-instances 20 --n-envs 2
+```
+
+The v2 runner saves:
+
+- `results_v2/summary_v2.csv`
+- `results_v2/detailed_results_v2.csv`
+- `results_v2/ablation_results.csv`
+- `results_v2/ppo_reward_comparison.csv`
+
+Default v2 variants include current PPO, no curriculum, no behavior cloning, no nearest-neighbor reward shaping, no nearest-neighbor bonus, reduced nearest-neighbor regret, stronger final makespan penalty, and a reduced-imitation behavior-cloning warm start. The no-action-mask PPO audit is opt-in with `--include-unmasked-eval` because it can produce infeasible routes.
+
 ## Limitations
 
 This first version intentionally keeps the formulation compact:

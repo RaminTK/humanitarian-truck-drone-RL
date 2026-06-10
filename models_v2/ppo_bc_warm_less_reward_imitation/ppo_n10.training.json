@@ -1,0 +1,25 @@
+{
+  "model_path": "/Users/raminkhameneh/Projects/humanitarian_truck_drone_rl/models_v2/ppo_bc_warm_less_reward_imitation/ppo_n10.zip",
+  "size": 10,
+  "total_timesteps": 512,
+  "train_instances": 20,
+  "seed": 42,
+  "n_envs": 1,
+  "max_nodes": 50,
+  "behavior_clone_epochs": 1,
+  "reward_config": {
+    "service_reward": 100.0,
+    "completion_bonus": 1000.0,
+    "invalid_action_penalty": 500.0,
+    "unserved_penalty": 5000.0,
+    "time_weight": 0.5,
+    "distance_weight": 1.0,
+    "nearest_neighbor_regret_weight": 0.5,
+    "nearest_neighbor_bonus": 0.0,
+    "final_makespan_weight": 0.1,
+    "final_distance_weight": 0.1,
+    "step_penalty": 1.0
+  },
+  "training_runtime_seconds": 0.3154114170001776,
+  "training_mode": "single_size"
+}

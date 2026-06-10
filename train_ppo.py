@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import json
 import time
+from dataclasses import asdict
 from pathlib import Path
 
 import numpy as np
 
 from instance_generator import generate_instances
-from truck_drone_env import TruckDroneEnv
+from truck_drone_env import DEFAULT_REWARD_CONFIG, RewardConfig, TruckDroneEnv
 from baselines import nearest_neighbor_policy
 
 
@@ -49,6 +50,7 @@ def train_ppo_for_size(
     n_envs: int = 4,
     max_nodes: int = 50,
     behavior_clone_epochs: int = 3,
+    reward_config: RewardConfig = DEFAULT_REWARD_CONFIG,
     verbose: int = 1,
 ) -> Path:
     """Train and save one MaskablePPO model for a fixed instance size."""
@@ -84,6 +86,7 @@ def train_ppo_for_size(
         log_dir=log_dir,
         Monitor=Monitor,
         DummyVecEnv=DummyVecEnv,
+        reward_config=reward_config,
     )
     _validate_maskable_env(
         env,
@@ -145,6 +148,7 @@ def train_ppo_for_size(
         n_envs=n_envs,
         max_nodes=max_nodes,
         behavior_clone_epochs=behavior_clone_epochs,
+        reward_config=reward_config,
         training_runtime_seconds=time.perf_counter() - training_start,
         training_mode="single_size",
     )
@@ -162,6 +166,7 @@ def train_curriculum_ppo(
     n_envs: int = 4,
     max_nodes: int = 50,
     behavior_clone_epochs: int = 3,
+    reward_config: RewardConfig = DEFAULT_REWARD_CONFIG,
     verbose: int = 1,
 ) -> dict[int, Path]:
     """Train one fixed-action MaskablePPO policy progressively across sizes."""
@@ -206,6 +211,7 @@ def train_curriculum_ppo(
             log_dir=stage_log_dir,
             Monitor=Monitor,
             DummyVecEnv=DummyVecEnv,
+            reward_config=reward_config,
         )
         _validate_maskable_env(
             env,
@@ -290,6 +296,7 @@ def train_curriculum_ppo(
             n_envs=n_envs,
             max_nodes=max_nodes,
             behavior_clone_epochs=behavior_clone_epochs,
+            reward_config=reward_config,
             training_runtime_seconds=time.perf_counter() - stage_start,
             training_mode="curriculum_stage",
             curriculum_stage=stage_index + 1,
@@ -310,6 +317,7 @@ def train_curriculum_ppo(
             n_envs=n_envs,
             max_nodes=max_nodes,
             behavior_clone_epochs=behavior_clone_epochs,
+            reward_config=reward_config,
             training_runtime_seconds=time.perf_counter() - curriculum_start,
             training_mode="curriculum_total",
             curriculum_sizes=sizes,
@@ -332,6 +340,7 @@ def _write_training_metadata(
     n_envs: int,
     max_nodes: int,
     behavior_clone_epochs: int,
+    reward_config: RewardConfig,
     training_runtime_seconds: float,
     training_mode: str,
     curriculum_stage: int | None = None,
@@ -346,6 +355,7 @@ def _write_training_metadata(
         "n_envs": int(n_envs),
         "max_nodes": int(max_nodes),
         "behavior_clone_epochs": int(behavior_clone_epochs),
+        "reward_config": asdict(reward_config),
         "training_runtime_seconds": float(training_runtime_seconds),
         "training_mode": training_mode,
     }
@@ -384,6 +394,7 @@ def _make_vec_env(
     log_dir: Path,
     Monitor: object,
     DummyVecEnv: object,
+    reward_config: RewardConfig,
 ):
     def make_env(rank: int):
         def _init():
@@ -392,6 +403,7 @@ def _make_vec_env(
                 max_nodes=max_nodes,
                 instance_pool=instance_pool,
                 seed=seed + (1000 * rank),
+                reward_config=reward_config,
             )
             env = Monitor(
                 env,
